@@ -15,6 +15,8 @@ class Appointment extends Model
 
     protected $fillable = [
         'reference_code',
+        'queue_number',
+        'manage_token',
         'service_id',
         'provider_id',
         'customer_name',
@@ -23,8 +25,10 @@ class Appointment extends Model
         'customer_notes',
         'starts_at',
         'ends_at',
+        'schedule_date',
         'timezone',
         'status',
+        'verified_at',
         'cancellation_reason',
         'cancelled_at',
         'is_recurring',
@@ -37,6 +41,8 @@ class Appointment extends Model
         return [
             'starts_at' => 'datetime',
             'ends_at' => 'datetime',
+            'schedule_date' => 'string',
+            'verified_at' => 'datetime',
             'cancelled_at' => 'datetime',
             'is_recurring' => 'boolean',
             'reminder_sent' => 'boolean',
@@ -58,7 +64,7 @@ class Appointment extends Model
      */
     public function canBeModified(): bool
     {
-        if ($this->status === 'cancelled' || $this->status === 'completed') {
+        if (in_array($this->status, ['cancelled', 'completed', 'no_show'], true)) {
             return false;
         }
 

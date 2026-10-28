@@ -61,7 +61,7 @@ class AdminBookingController extends Controller
     public function updateStatus(Request $request, int $id): JsonResponse
     {
         $validated = $request->validate([
-            'status' => 'required|in:pending,confirmed,completed,cancelled,no_show',
+            'status' => 'required|in:pending,confirmed,serving,completed,cancelled,no_show',
         ]);
 
         $appointment = Appointment::findOrFail($id);

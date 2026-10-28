@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Appointment;
 use App\Models\BlockedTime;
+use App\Models\BookingVerification;
 use App\Models\Provider;
 use App\Models\Service;
 use App\Models\Waitlist;
@@ -19,10 +20,15 @@ class BookingManagerService
     ) {}
 
     /**
-     * Create an appointment.
+     * Create an appointment with atomic queue numbering and safeguards.
      */
     public function createAppointment(array $data): Appointment
     {
+        // 1. Anti-spam honeypot safeguard
+        if (! empty($data['honeypot'])) {
+            throw new Exception('Automated booking request rejected.');
+        }
+
         return DB::transaction(function () use ($data) {
             $service = Service::findOrFail($data['service_id']);
             $provider = Provider::findOrFail($data['provider_id']);
@@ -31,7 +37,44 @@ class BookingManagerService
             $startsAt = Carbon::parse($data['starts_at'], $timezone);
             $endsAt = $startsAt->copy()->addMinutes($service->duration_minutes);
             $endsAtWithBuffer = $endsAt->copy()->addMinutes($service->buffer_minutes);
+            $scheduleDate = $startsAt->format('Y-m-d');
 
+            // 2. Duplicate booking safeguard: 1 active booking per contact per day
+            $hasActiveBooking = Appointment::where(function ($q) use ($scheduleDate) {
+                $q->whereDate('schedule_date', $scheduleDate)
+                    ->orWhereDate('starts_at', $scheduleDate);
+            })
+                ->whereIn('status', ['confirmed', 'serving', 'pending'])
+                ->where(function ($q) use ($data) {
+                    $q->where('customer_email', $data['customer_email'])
+                        ->orWhere('customer_phone', $data['customer_phone']);
+                })
+                ->lockForUpdate()
+                ->exists();
+
+            if ($hasActiveBooking) {
+                throw new Exception("An active booking for this email or phone already exists on {$scheduleDate}. Guests are limited to one active booking per day.");
+            }
+
+            // 3. Double booking safeguard: re-check slot capacity inside transaction with row locking
+            // 2. Duplicate booking safeguard: 1 active booking per contact per day
+            $hasActiveBooking = Appointment::where(function ($q) use ($scheduleDate) {
+                $q->whereDate('schedule_date', $scheduleDate)
+                    ->orWhereDate('starts_at', $scheduleDate);
+            })
+                ->whereIn('status', ['confirmed', 'serving', 'pending'])
+                ->where(function ($q) use ($data) {
+                    $q->where('customer_email', $data['customer_email'])
+                        ->orWhere('customer_phone', $data['customer_phone']);
+                })
+                ->lockForUpdate()
+                ->exists();
+
+            if ($hasActiveBooking) {
+                throw new Exception("An active booking for this email or phone already exists on {$scheduleDate}. Guests are limited to one active booking per day.");
+            }
+
+            // 3. Double booking safeguard: re-check slot capacity inside transaction with row locking
             $conflict = Appointment::where('provider_id', $provider->id)
                 ->where('status', '!=', 'cancelled')
                 ->where(function ($q) use ($startsAt, $endsAtWithBuffer) {
@@ -56,12 +99,30 @@ class BookingManagerService
                 throw new Exception('The selected time is blocked by the provider or clinic.');
             }
 
+            // 4. Verify contact token if supplied
+            $verifiedAt = null;
+            if (! empty($data['verification_token'])) {
+                $verification = BookingVerification::where('token', $data['verification_token'])
+                    ->whereNotNull('verified_at')
+                    ->first();
+                if ($verification) {
+                    $verifiedAt = $verification->verified_at;
+                }
+            } elseif (! empty($data['verified_at'])) {
+                $verifiedAt = Carbon::parse($data['verified_at']);
+            }
+
             $referenceCode = $this->generateUniqueReferenceCode();
+            $manageToken = $this->generateManageToken();
+            $queueNumber = $this->generateQueueNumber($service, $scheduleDate);
+
             $isRecurring = ! empty($data['is_recurring']);
             $recurringGroupId = $isRecurring ? 'REC-'.Str::upper(Str::random(8)) : null;
 
             $appointment = Appointment::create([
                 'reference_code' => $referenceCode,
+                'queue_number' => $queueNumber,
+                'manage_token' => $manageToken,
                 'service_id' => $service->id,
                 'provider_id' => $provider->id,
                 'customer_name' => $data['customer_name'],
@@ -70,8 +131,10 @@ class BookingManagerService
                 'customer_notes' => $data['customer_notes'] ?? null,
                 'starts_at' => $startsAt,
                 'ends_at' => $endsAt,
+                'schedule_date' => $scheduleDate,
                 'timezone' => $timezone,
                 'status' => 'confirmed',
+                'verified_at' => $verifiedAt,
                 'is_recurring' => $isRecurring,
                 'recurring_group_id' => $recurringGroupId,
             ]);
@@ -82,6 +145,7 @@ class BookingManagerService
                     $nextStart = $startsAt->copy()->addWeeks($w);
                     $nextEnd = $nextStart->copy()->addMinutes($service->duration_minutes);
                     $nextEndWithBuffer = $nextEnd->copy()->addMinutes($service->buffer_minutes);
+                    $nextScheduleDate = $nextStart->format('Y-m-d');
 
                     $recurringConflict = Appointment::where('provider_id', $provider->id)
                         ->where('status', '!=', 'cancelled')
@@ -92,8 +156,13 @@ class BookingManagerService
                         ->exists();
 
                     if (! $recurringConflict) {
+                        $nextQueue = $this->generateQueueNumber($service, $nextScheduleDate);
+                        $nextManageToken = $this->generateManageToken();
+
                         Appointment::create([
                             'reference_code' => $this->generateUniqueReferenceCode(),
+                            'queue_number' => $nextQueue,
+                            'manage_token' => $nextManageToken,
                             'service_id' => $service->id,
                             'provider_id' => $provider->id,
                             'customer_name' => $data['customer_name'],
@@ -102,8 +171,10 @@ class BookingManagerService
                             'customer_notes' => ($data['customer_notes'] ?? '').' [Recurring #'.($w + 1).']',
                             'starts_at' => $nextStart,
                             'ends_at' => $nextEnd,
+                            'schedule_date' => $nextScheduleDate,
                             'timezone' => $timezone,
                             'status' => 'confirmed',
+                            'verified_at' => $verifiedAt,
                             'is_recurring' => true,
                             'recurring_group_id' => $recurringGroupId,
                         ]);
@@ -113,6 +184,152 @@ class BookingManagerService
 
             return $appointment;
         });
+    }
+
+    /**
+     * Send an OTP code to a guest contact (email or phone).
+     *
+     * @return array{success: bool, message: string, contact: string, dev_code: string, expires_at: string}
+     */
+    public function sendOtp(string $contact): array
+    {
+        $cleanContact = trim($contact);
+        if (empty($cleanContact)) {
+            throw new Exception('Please enter a valid email or phone number to verify.');
+        }
+
+        // Rate limit: max 5 OTP requests per 10 minutes per contact
+        $recentCount = BookingVerification::where('contact', $cleanContact)
+            ->where('created_at', '>=', Carbon::now()->subMinutes(10))
+            ->count();
+
+        if ($recentCount >= 5) {
+            throw new Exception('Too many OTP verification requests. Please wait a few minutes before trying again.');
+        }
+
+        // Invalidate older unverified codes
+        BookingVerification::where('contact', $cleanContact)
+            ->whereNull('verified_at')
+            ->delete();
+
+        $code = sprintf('%06d', mt_rand(100000, 999999));
+        $expiresAt = Carbon::now()->addMinutes(10);
+
+        BookingVerification::create([
+            'contact' => $cleanContact,
+            'otp_code' => $code,
+            'expires_at' => $expiresAt,
+        ]);
+
+        return [
+            'success' => true,
+            'message' => "A 6-digit verification code has been dispatched to {$cleanContact}.",
+            'contact' => $cleanContact,
+            'dev_code' => $code, // Surfaced for mock verification & notification display
+            'expires_at' => $expiresAt->toISOString(),
+        ];
+    }
+
+    /**
+     * Verify an OTP code.
+     *
+     * @return array{success: bool, message: string, verification_token: string, verified_at: string}
+     */
+    public function verifyOtp(string $contact, string $code): array
+    {
+        $cleanContact = trim($contact);
+        $cleanCode = trim($code);
+
+        $verification = BookingVerification::where('contact', $cleanContact)
+            ->where('expires_at', '>', Carbon::now())
+            ->whereNull('verified_at')
+            ->latest()
+            ->first();
+
+        if (! $verification) {
+            throw new Exception('Verification code expired or not found. Please request a new code.');
+        }
+
+        if ($verification->attempts >= 5) {
+            throw new Exception('Too many invalid attempts. Please request a new verification code.');
+        }
+
+        if ($verification->otp_code !== $cleanCode) {
+            $verification->increment('attempts');
+            throw new Exception('Invalid 6-digit verification code. Please check and try again.');
+        }
+
+        $token = Str::random(40);
+        $verification->update([
+            'verified_at' => Carbon::now(),
+            'token' => $token,
+        ]);
+
+        return [
+            'success' => true,
+            'message' => 'Contact verified successfully.',
+            'verification_token' => $token,
+            'verified_at' => $verification->verified_at->toISOString(),
+        ];
+    }
+
+    /**
+     * Look up a booking by reference code AND email or phone (when guest loses link/email).
+     */
+    public function lookupBooking(string $referenceCode, string $contact): Appointment
+    {
+        $code = strtoupper(trim($referenceCode));
+        $cleanContact = strtolower(trim($contact));
+
+        $appointment = Appointment::with(['service', 'provider'])
+            ->where('reference_code', $code)
+            ->where(function ($q) use ($cleanContact) {
+                $q->whereRaw('LOWER(customer_email) = ?', [$cleanContact])
+                    ->orWhere('customer_phone', $cleanContact);
+            })
+            ->first();
+
+        if (! $appointment) {
+            throw new Exception('No matching booking found for the provided reference code and contact details.');
+        }
+
+        return $appointment;
+    }
+
+    /**
+     * Get appointment by guest manage token (No Login required).
+     */
+    public function getAppointmentByManageToken(string $token): Appointment
+    {
+        $appointment = Appointment::with(['service', 'provider'])
+            ->where('manage_token', $token)
+            ->first();
+
+        if (! $appointment) {
+            throw new Exception('Invalid or expired booking management link.');
+        }
+
+        return $appointment;
+    }
+
+    /**
+     * Reschedule appointment by guest manage token.
+     */
+    public function rescheduleByToken(string $token, string $newStartsAt): Appointment
+    {
+        $appointment = $this->getAppointmentByManageToken($token);
+
+        return $this->rescheduleAppointment($appointment, $newStartsAt);
+    }
+
+    /**
+     * Cancel appointment by guest manage token (releases slot back to pool).
+     */
+    public function cancelByToken(string $token, ?string $reason = null): Appointment
+    {
+        $appointment = $this->getAppointmentByManageToken($token);
+
+        return $this->cancelAppointment($appointment, $reason);
     }
 
     /**
@@ -129,6 +346,7 @@ class BookingManagerService
             $newStartsAt = Carbon::parse($newStartsAtString, $appointment->timezone);
             $newEndsAt = $newStartsAt->copy()->addMinutes($service->duration_minutes);
             $newEndsAtWithBuffer = $newEndsAt->copy()->addMinutes($service->buffer_minutes);
+            $newScheduleDate = $newStartsAt->format('Y-m-d');
 
             $conflict = Appointment::where('provider_id', $appointment->provider_id)
                 ->where('id', '!=', $appointment->id)
@@ -144,9 +362,17 @@ class BookingManagerService
                 throw new Exception('The selected new slot is no longer available.');
             }
 
+            // Assign new queue number if moving to a different date
+            $queueNumber = $appointment->queue_number;
+            if ($appointment->schedule_date?->format('Y-m-d') !== $newScheduleDate) {
+                $queueNumber = $this->generateQueueNumber($service, $newScheduleDate);
+            }
+
             $appointment->update([
                 'starts_at' => $newStartsAt,
                 'ends_at' => $newEndsAt,
+                'schedule_date' => $newScheduleDate,
+                'queue_number' => $queueNumber,
                 'status' => 'confirmed',
             ]);
 
@@ -177,7 +403,7 @@ class BookingManagerService
      */
     public function updateStatus(Appointment $appointment, string $status): Appointment
     {
-        $validStatuses = ['pending', 'confirmed', 'completed', 'cancelled', 'no_show'];
+        $validStatuses = ['pending', 'confirmed', 'serving', 'completed', 'cancelled', 'no_show'];
         if (! in_array($status, $validStatuses, true)) {
             throw new Exception("Invalid appointment status: {$status}");
         }
@@ -185,6 +411,53 @@ class BookingManagerService
         $appointment->update(['status' => $status]);
 
         return $appointment;
+    }
+
+    /**
+     * Get privacy-safe "Now Serving" public queue display.
+     */
+    public function getNowServingQueue(?string $date = null): array
+    {
+        $scheduleDate = $date ?? Carbon::today()->format('Y-m-d');
+
+        $serving = Appointment::with('service')
+            ->where(function ($q) use ($scheduleDate) {
+                $q->whereDate('schedule_date', $scheduleDate)
+                    ->orWhereDate('starts_at', $scheduleDate);
+            })
+            ->where('status', 'serving')
+            ->orderBy('starts_at')
+            ->get()
+            ->map(fn ($apt) => [
+                'queue_number' => $apt->queue_number,
+                'service_name' => $apt->service?->name ?? 'General Service',
+                'time' => Carbon::parse($apt->starts_at)->format('H:i'),
+                'status' => 'serving',
+            ]);
+
+        $nextUp = Appointment::with('service')
+            ->where(function ($q) use ($scheduleDate) {
+                $q->whereDate('schedule_date', $scheduleDate)
+                    ->orWhereDate('starts_at', $scheduleDate);
+            })
+            ->where('status', 'confirmed')
+            ->orderBy('starts_at')
+            ->take(12)
+            ->get()
+            ->map(fn ($apt) => [
+                'queue_number' => $apt->queue_number,
+                'service_name' => $apt->service?->name ?? 'General Service',
+                'time' => Carbon::parse($apt->starts_at)->format('H:i'),
+                'status' => 'confirmed',
+            ]);
+
+        return [
+            'date' => $scheduleDate,
+            'serving' => $serving,
+            'next_up' => $nextUp,
+            'total_serving' => $serving->count(),
+            'total_waiting' => $nextUp->count(),
+        ];
     }
 
     /**
@@ -228,8 +501,8 @@ class BookingManagerService
         $dtStart = Carbon::parse($appointment->starts_at)->utc()->format('Ymd\THis\Z');
         $dtEnd = Carbon::parse($appointment->ends_at)->utc()->format('Ymd\THis\Z');
         $dtStamp = Carbon::now()->utc()->format('Ymd\THis\Z');
-        $summary = "Appointment: {$appointment->service->name} with {$appointment->provider->name}";
-        $description = "Booking Reference: {$appointment->reference_code}\\nClient: {$appointment->customer_name}\\nDuration: {$appointment->service->duration_minutes} mins";
+        $summary = "Appointment: {$appointment->service->name} with {$appointment->provider->name} (Queue: {$appointment->queue_number})";
+        $description = "Booking Reference: {$appointment->reference_code}\\nQueue Number: {$appointment->queue_number}\\nClient: {$appointment->customer_name}\\nDuration: {$appointment->service->duration_minutes} mins";
 
         return "BEGIN:VCALENDAR\r\n".
             "VERSION:2.0\r\n".
@@ -255,8 +528,8 @@ class BookingManagerService
     {
         $dtStart = Carbon::parse($appointment->starts_at)->utc()->format('Ymd\THis\Z');
         $dtEnd = Carbon::parse($appointment->ends_at)->utc()->format('Ymd\THis\Z');
-        $title = urlencode("{$appointment->service->name} with {$appointment->provider->name}");
-        $details = urlencode("Booking Ref: {$appointment->reference_code}\nService: {$appointment->service->name}\nProvider: {$appointment->provider->name}");
+        $title = urlencode("{$appointment->service->name} with {$appointment->provider->name} [Queue {$appointment->queue_number}]");
+        $details = urlencode("Booking Ref: {$appointment->reference_code}\nQueue Number: {$appointment->queue_number}\nService: {$appointment->service->name}\nProvider: {$appointment->provider->name}");
 
         return "https://calendar.google.com/calendar/render?action=TEMPLATE&text={$title}&dates={$dtStart}/{$dtEnd}&details={$details}";
     }
@@ -271,5 +544,43 @@ class BookingManagerService
         } while (Appointment::where('reference_code', $code)->exists());
 
         return $code;
+    }
+
+    /**
+     * Generate an unguessable guest management token.
+     */
+    protected function generateManageToken(): string
+    {
+        do {
+            $token = Str::random(48);
+        } while (Appointment::where('manage_token', $token)->exists());
+
+        return $token;
+    }
+
+    /**
+     * Atomically generate a per-day, per-service sequential queue number.
+     * Resets daily (e.g. A-001, A-002, B-001).
+     */
+    protected function generateQueueNumber(Service $service, string $scheduleDate): string
+    {
+        $prefix = chr(65 + (($service->id - 1) % 26));
+
+        $latest = Appointment::where('service_id', $service->id)
+            ->where(function ($q) use ($scheduleDate) {
+                $q->whereDate('schedule_date', $scheduleDate)
+                    ->orWhereDate('starts_at', $scheduleDate);
+            })
+            ->whereNotNull('queue_number')
+            ->lockForUpdate()
+            ->orderByDesc('id')
+            ->first();
+
+        $seq = 1;
+        if ($latest && preg_match('/-(\d+)$/', $latest->queue_number, $matches)) {
+            $seq = ((int) $matches[1]) + 1;
+        }
+
+        return sprintf('%s-%03d', $prefix, $seq);
     }
 }

@@ -1,111 +1,138 @@
-# Appointment Booking & Scheduler
+# Appointment Booking & Scheduler (Node.js & Express)
 
-A modern, full-stack appointment scheduling and provider management web application built with **Laravel 12 (PHP 8.3)**, **Tailwind CSS v4**, and **Alpine.js**.
+A modern, high-performance appointment booking and queue management system built with **Node.js (v24)**, **Express**, **MySQL (XAMPP / MariaDB)**, **Tailwind CSS**, and **Alpine.js**.
 
 ---
 
-## ✨ Features
+## 🚀 Key Features
 
-### 👤 Client Booking View
-- **Multi-Service Selection**: Multiple appointment services with customizable duration (15m to 90m), buffer times, and pricing.
-- **Provider Choice & Availability**: Filter availability by specific provider or choose "Any Available Specialist".
-- **Real-Time Calendar**: Visual month calendar showing available vs. fully booked days, past date disabling, and national holiday gray-out.
+### 1. Guest Booking Workflow (No Login Required)
+- **Direct Access**: Guests book schedules directly without creating an account or logging in.
+- **Service Selection**: Services with prices in **Philippine Peso (`₱` / PHP)** (₱500, ₱1,200, ₱2,000, ₱3,000).
+- **Interactive Calendar**: Visual month calendar showing available vs. few slots vs. fully booked days, past date disabling, and holiday detection. No dead space.
 - **Dynamic Slot Generation**:
-  - Automatically calculates bookable time slots based on provider working hours, service duration, and required buffer times.
-  - Enforces a minimum 2-hour lead time (past slots collapsed).
-  - Race-condition and double-booking prevention using database-level locking (`lockForUpdate`).
-- **Immediate Booking Summary & Confirmation**:
-  - Live summary card keeping track of selected service, provider, date, and slot.
-  - Generates a unique reference code (`APT-XXXXXX`).
-  - Google Calendar direct link (`calendar.google.com`) and downloadable iCalendar (`.ics`) file.
-- **Manage Bookings**: Self-service appointment cancellation and rescheduling governed by a strict 24-hour lead rule.
-- **Recurring Bookings**: Optional weekly recurring slot reservation.
-- **Waitlist Registration**: Join priority waitlist when dates or slots are full.
-- **Simulated Communications**: Real-time simulated SMS and transactional email drawer for client confirmations.
+  - Automatically calculates bookable time slots based on provider working hours, duration, and buffer times.
+  - Enforces minimum 2-hour lead time notice.
+  - Double-booking prevention via database transaction row locks (`FOR UPDATE`).
+- **Direct Contact Submission**: Full Name, Email, Phone, and optional notes (Direct guest confirmation, OTP removed).
+- **Atomic Daily Sequential Queue Numbering**:
+  - Sequential queue counter generated atomically per day and per service (`A-001`, `A-002`, `B-001`).
+  - Resets daily.
+- **Self-Service Manage Link**:
+  - Unguessable private token link (`/manage/:token`) allowing guests to view, reschedule, or cancel anytime without login.
+- **Lost Booking Lookup**:
+  - Guests can retrieve their appointment anytime using their Reference Code (`APT-XXXXXX`) and Email/Phone.
+- **Calendar Integrations**:
+  - Instant Google Calendar event link and downloadable `.ics` iCalendar file.
+- **Anti-Spam & Duplicate Booking Protections**:
+  - Honeypot spam bot traps.
+  - 1 active booking per contact per day policy.
 
-### 🛡️ Admin & Provider Portal
-- **Daily Schedule Dashboard**: View real-time schedule timeline grouped by provider and time.
-- **Key Performance Indicators (KPIs)**: Total appointments, capacity utilization rate, revenue, completed, and no-show metrics.
-- **Time Block-Outs**: Block off vacations, emergencies, or staff meetings to prevent client bookings.
-- **Status Workflows**: Seamlessly transition appointments across `Pending` ➔ `Confirmed` ➔ `Completed` / `Cancelled` / `No-Show`.
-- **Waitlist Review**: View and manage queued waitlist requests with customer contact information.
+### 2. Live "Now Serving" Public Queue Board
+- Privacy-safe queue display for clinic TVs and waiting areas (`/api/queue/now-serving`).
+- Displays serving tickets and next-in-line tickets while concealing sensitive customer contact details.
 
----
-
-## 🛠️ Tech Stack
-
-- **Backend**: Laravel 12, PHP 8.3, SQLite / MySQL
-- **Frontend**: Blade, Tailwind CSS 4.0, Alpine.js 3.x
-- **Build Tool**: Vite 8.3
-- **Testing**: PHPUnit / Laravel Test Suite (10 feature tests, 45 assertions)
-- **Formatting**: Laravel Pint
+### 3. Admin & Provider Operations
+- **Daily Queue & Schedule Dashboard**: Filterable by date, provider, and status (`Confirmed`, `Serving`, `Completed`, `Cancelled`, `No-Show`).
+- **Key Performance Indicators (KPIs)**: Total bookings, capacity usage %, completed count, waitlist count, and Estimated Daily Revenue in **Philippine Peso (`₱`)**.
+- **Time Block-Outs**: Block off vacations or maintenance windows.
+- **Priority Waitlist**: Waitlist management for fully booked days.
 
 ---
 
-## 🚀 Getting Started
+## 🛠 Tech Stack
 
-### Prerequisites
-
-- PHP 8.3+
-- Composer
-- Node.js 18+ and npm
-
-### Installation
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/croun/Appointment-Booking-Scheduler.git
-   cd Appointment-Booking-Scheduler
-   ```
-
-2. **Install PHP dependencies**:
-   ```bash
-   composer install
-   ```
-
-3. **Install JavaScript dependencies**:
-   ```bash
-   npm install
-   ```
-
-4. **Environment Setup**:
-   ```bash
-   cp .env.example .env
-   php artisan key:generate
-   ```
-
-5. **Database Migration & Seeding**:
-   ```bash
-   php artisan migrate:fresh --seed
-   ```
-
-6. **Build Frontend Assets**:
-   ```bash
-   npm run build
-   ```
-
-7. **Run the Development Server**:
-   ```bash
-   php artisan serve
-   ```
-   Open `http://localhost:8000` in your browser.
+- **Backend Runtime**: Node.js v24.x
+- **Framework**: Express 5.x
+- **Database**: MySQL 8.0+ / MariaDB (XAMPP phpMyAdmin) using `mysql2/promise` connection pooling
+- **Template & Views**: EJS, HTML5
+- **Styling**: Tailwind CSS
+- **Interactivity**: Alpine.js 3.x
+- **Date & Calendar**: JavaScript standard UTC & Intl API, iCalendar RFC 5545 generator
 
 ---
 
-## 🧪 Testing
+## 📦 Project Structure
 
-Run the automated test suite:
-```bash
-php artisan test
 ```
-
-Run code formatting checks:
-```bash
-vendor/bin/pint
+appointment-booking-scheduler/
+├── server.js                      # Server entry point (starts Express on port 8000)
+├── server/
+│   ├── app.js                     # Express app configuration & middlewares
+│   ├── config/
+│   │   └── db.js                  # MySQL pool configuration (reads .env)
+│   ├── controllers/
+│   │   ├── bookingController.js   # Guest booking, slots, lookup, manage, ics
+│   │   └── adminBookingController.js # Admin schedule, stats, block times, waitlist
+│   ├── services/
+│   │   ├── bookingAvailabilityService.js # Calendar summary & slot computation
+│   │   └── bookingManagerService.js      # Atomic queue numbering, locking, transactions
+│   ├── routes/
+│   │   ├── api.js                 # API endpoints (/api/*)
+│   │   └── web.js                 # Web page routes (/, /manage/:token)
+│   └── utils/
+│       └── icsGenerator.js        # iCalendar (.ics) and Google Calendar generator
+├── views/
+│   └── scheduler.ejs              # Main responsive scheduler UI
+├── public/                        # Static assets (Tailwind CSS, fonts, icons)
+├── database/
+│   └── database.sql               # Full MySQL database schema & initial seed data
+├── .env                           # Environment configuration
+└── package.json                   # Dependencies and scripts
 ```
 
 ---
 
-## 📄 License
+## 🏁 Quick Start
 
-This project is licensed under the [MIT License](LICENSE).
+### 1. Database Setup (XAMPP MySQL)
+1. Ensure MySQL is running in XAMPP on port `3306`.
+2. Access phpMyAdmin at:
+   `http://localhost/phpmyadmin/index.php?route=/database/structure&db=appointment_booking_scheduler`
+3. If not already present, import `database/database.sql`.
+
+### 2. Environment Configuration (`.env`)
+```ini
+PORT=8000
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=appointment_booking_scheduler
+DB_USERNAME=root
+DB_PASSWORD=
+APP_TIMEZONE=UTC
+```
+
+### 3. Run the Node.js Server
+```bash
+# Start server
+npm start
+
+# Or directly:
+node server.js
+```
+
+Open your browser at:
+👉 **[http://localhost:8000](http://localhost:8000)**
+
+---
+
+## 📡 API Endpoints Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/` | Scheduler main page |
+| `GET` | `/manage/:token` | Guest direct manage page |
+| `GET` | `/api/calendar-summary` | Monthly availability summary |
+| `GET` | `/api/slots` | Time slots for selected date |
+| `POST` | `/api/appointments` | Book appointment (generates queue number & manage token) |
+| `POST` | `/api/appointments/lookup` | Look up lost booking by reference code & phone/email |
+| `GET` | `/api/appointments/:code/ics` | Download .ics calendar file |
+| `GET` | `/api/manage/:token` | Retrieve appointment using manage token |
+| `POST` | `/api/manage/:token/reschedule` | Reschedule appointment |
+| `POST` | `/api/manage/:token/cancel` | Cancel appointment |
+| `GET` | `/api/queue/now-serving` | Live public queue board |
+| `POST` | `/api/waitlist` | Join priority waitlist |
+| `GET` | `/api/admin/appointments` | Admin appointment list with filters |
+| `POST` | `/api/admin/appointments/:id/status` | Update status (serving, confirmed, completed, etc.) |
+| `GET` | `/api/admin/stats` | Admin KPIs (revenue in ₱, capacity, counts) |
+| `POST` | `/api/admin/blocked-times` | Block a time window |
