@@ -113,26 +113,3 @@ node server.js
 
 Open your browser at:
 **[http://localhost:8000](http://localhost:8000)**
-
----
-
-## API Endpoints Reference
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | Scheduler main page |
-| `GET` | `/manage/:token` | Guest direct manage page |
-| `GET` | `/api/calendar-summary` | Monthly availability summary |
-| `GET` | `/api/slots` | Time slots for selected date |
-| `POST` | `/api/appointments` | Book appointment (generates queue number & manage token) |
-| `POST` | `/api/appointments/lookup` | Look up lost booking by reference code & phone/email |
-| `GET` | `/api/appointments/:code/ics` | Download .ics calendar file |
-| `GET` | `/api/manage/:token` | Retrieve appointment using manage token |
-| `POST` | `/api/manage/:token/reschedule` | Reschedule appointment |
-| `POST` | `/api/manage/:token/cancel` | Cancel appointment |
-| `GET` | `/api/queue/now-serving` | Live public queue board |
-| `POST` | `/api/waitlist` | Join priority waitlist |
-| `GET` | `/api/admin/appointments` | Admin appointment list with filters |
-| `POST` | `/api/admin/appointments/:id/status` | Update status (serving, confirmed, completed, etc.) |
-| `GET` | `/api/admin/stats` | Admin KPIs (revenue in ₱, capacity, counts) |
-| `POST` | `/api/admin/blocked-times` | Block a time window |
