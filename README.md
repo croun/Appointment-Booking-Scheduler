@@ -4,7 +4,7 @@ A modern, high-performance appointment booking and queue management system built
 
 ---
 
-## 🚀 Key Features
+## Key Features
 
 ### 1. Guest Booking Workflow (No Login Required)
 - **Direct Access**: Guests book schedules directly without creating an account or logging in.
@@ -40,7 +40,7 @@ A modern, high-performance appointment booking and queue management system built
 
 ---
 
-## 🛠 Tech Stack
+## Tech Stack
 
 - **Backend Runtime**: Node.js v24.x
 - **Framework**: Express 5.x
@@ -52,7 +52,7 @@ A modern, high-performance appointment booking and queue management system built
 
 ---
 
-## 📦 Project Structure
+## Project Structure
 
 ```
 appointment-booking-scheduler/
@@ -83,7 +83,7 @@ appointment-booking-scheduler/
 
 ---
 
-## 🏁 Quick Start
+## Quick Start
 
 ### 1. Database Setup (XAMPP MySQL)
 1. Ensure MySQL is running in XAMPP on port `3306`.
@@ -112,11 +112,11 @@ node server.js
 ```
 
 Open your browser at:
-👉 **[http://localhost:8000](http://localhost:8000)**
+**[http://localhost:8000](http://localhost:8000)**
 
 ---
 
-## 📡 API Endpoints Reference
+## API Endpoints Reference
 
 | Method | Endpoint | Description |
 |---|---|---|
